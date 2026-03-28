@@ -1,5 +1,10 @@
 # Outline Desktop App — Self-Hosted Mod
 
+[![CI](https://github.com/shadowrock-io/outline-mod-self-hosted/actions/workflows/ci.yml/badge.svg)](https://github.com/shadowrock-io/outline-mod-self-hosted/actions/workflows/ci.yml)
+[![ShellCheck](https://img.shields.io/badge/ShellCheck-passing-brightgreen)](https://www.shellcheck.net/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![No Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)]()
+
 Patch the [Outline](https://www.getoutline.com/) desktop app to connect to your self-hosted instance instead of `app.getoutline.com`.
 
 One script. One string change. Fully reversible. Cleans up after itself.

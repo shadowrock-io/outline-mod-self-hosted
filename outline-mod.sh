@@ -502,8 +502,9 @@ sha256() {
 
 read_current_url() {
   local env_js="$1"
-  # Match the production URL inside backticks in the host getter
+  # Match the production URL inside JS template-literal backticks in the host getter
   local url
+  # shellcheck disable=SC2016 # backticks are literal (JS template syntax, not shell)
   url="$(grep -oE '`https://[^`]+`' "$env_js" 2>/dev/null | tr -d '`' | head -1)"
   echo "$url"
 }
