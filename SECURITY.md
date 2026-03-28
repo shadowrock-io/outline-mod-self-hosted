@@ -25,12 +25,12 @@ Before running, you can:
 1. **Read it.** Each script is a single file with no obfuscation.
 2. **Run `--dry-run`.** Previews every action with exact commands, modifies nothing.
 3. **Run ShellCheck.** `shellcheck outline-mod.sh` produces zero findings.
-4. **Check CI.** Every push runs ShellCheck, secret scanning (Gitleaks), and URL normalization tests.
+4. **Check CI.** Every push runs ShellCheck, secret scanning, and URL normalization tests.
 5. **Verify the SHA256.** After cloning, compare against the hash shown in the latest CI run.
 
 ## Reporting a vulnerability
 
-If you find a security issue, email **security@shadowrock.io** or open a private GitHub security advisory on this repo.
+If you find a security issue, open a [private security advisory](https://github.com/shadowrock-io/outline-mod-self-hosted/security/advisories/new) on this repository.
 
 Do not open a public issue for security vulnerabilities.
 

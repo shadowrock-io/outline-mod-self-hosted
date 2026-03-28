@@ -9,6 +9,12 @@ Patch the [Outline](https://www.getoutline.com/) desktop app to connect to your 
 
 One script. One string change. Fully reversible. Cleans up after itself.
 
+## The Problem
+
+The Outline desktop app hardcodes its server URL to `app.getoutline.com`. There is no setting, preference, or config file to change it. If you self-host Outline (via Docker, Kubernetes, or bare metal), the official desktop app cannot connect to your server.
+
+This tool fixes that. It changes one URL string inside the app's Electron archive, then backs everything up so you can undo it at any time.
+
 ## Quick Start
 
 **macOS / Linux:**
@@ -40,21 +46,21 @@ The script prompts for your Outline URL, validates it, patches the app, and conf
 **macOS / Linux (Bash):**
 
 ```
-./outline-mod.sh                                    # Interactive prompt
-./outline-mod.sh https://docs.example.com           # Direct URL
-./outline-mod.sh --dry-run https://docs.example.com # Preview actions
-./outline-mod.sh --rollback                         # Restore original
-./outline-mod.sh --status                           # Inspect state + checksums
-./outline-mod.sh --app-path ~/custom/Outline.app    # Custom install location
-./outline-mod.sh --verbose                          # Debug output
+./outline-mod.sh                                           # Interactive prompt
+./outline-mod.sh https://outline.your-domain.com           # Direct URL
+./outline-mod.sh --dry-run https://outline.your-domain.com # Preview actions
+./outline-mod.sh --rollback                                # Restore original
+./outline-mod.sh --status                                  # Inspect state + checksums
+./outline-mod.sh --app-path ~/custom/Outline.app           # Custom install location
+./outline-mod.sh --verbose                                 # Debug output
 ./outline-mod.sh --help
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-.\outline-mod.ps1 https://docs.example.com
-.\outline-mod.ps1 -DryRun https://docs.example.com
+.\outline-mod.ps1 https://outline.your-domain.com
+.\outline-mod.ps1 -DryRun https://outline.your-domain.com
 .\outline-mod.ps1 -Rollback
 .\outline-mod.ps1 -Status
 .\outline-mod.ps1 -AppPath "D:\Programs\Outline"
@@ -69,7 +75,7 @@ The script prompts for your Outline URL, validates it, patches the app, and conf
 | Linux | Outline (auto-detected in `/opt`, `/usr/lib`, `~/.local`) | Node.js / `npx` |
 | Windows | Outline (auto-detected in `%LOCALAPPDATA%\Programs` or `%PROGRAMFILES%`) | Node.js / `npx` |
 
-`npx` downloads `@electron/asar` temporarily during the mod. The script **removes it from the npx cache when done** — no leftover dependencies.
+`npx` downloads `@electron/asar` temporarily during the mod. The script **removes it from the npx cache when done**.
 
 ## How It Works
 
@@ -113,17 +119,17 @@ The script:
 
 ## URL Validation
 
-The script accepts a variety of URL formats:
+The script accepts a variety of URL formats and normalizes them:
 
 | Input | Normalized To |
 |---|---|
-| `https://docs.example.com` | `https://docs.example.com` |
-| `https://docs.example.com/` | `https://docs.example.com` |
-| `https://DOCS.Example.COM` | `https://docs.example.com` |
-| `HTTPS://docs.example.com` | `https://docs.example.com` |
-| `https://outline.company.io:8443` | `https://outline.company.io:8443` |
-| `https://docs.example.com/path/stuff` | `https://docs.example.com` |
-| `docs.example.com` | `https://docs.example.com` |
+| `https://outline.your-domain.com` | `https://outline.your-domain.com` |
+| `https://outline.your-domain.com/` | `https://outline.your-domain.com` |
+| `https://OUTLINE.Your-Domain.COM` | `https://outline.your-domain.com` |
+| `HTTPS://outline.your-domain.com` | `https://outline.your-domain.com` |
+| `https://outline.your-domain.com:8443` | `https://outline.your-domain.com:8443` |
+| `https://outline.your-domain.com/path/stuff` | `https://outline.your-domain.com` |
+| `outline.your-domain.com` | `https://outline.your-domain.com` |
 
 Validation checks: HTTPS required, FQDN (must contain a dot), valid port (1-65535), no invalid characters, reachability test (with bypass for VPN/internal hosts), rejects `app.getoutline.com`.
 
@@ -163,12 +169,36 @@ After patching, the auth flow works through Outline's existing `outline://` URL 
 
 Restores the original ASAR from backup, verifies the SHA256 checksum, re-signs (macOS), and re-enables auto-updates. You can also reinstall Outline from scratch.
 
+## FAQ
+
+**Can I switch to a different self-hosted URL later?**
+Yes. Run the script again with the new URL. It detects the existing mod and swaps the URL. The backup of the original (unmodified) app is preserved.
+
+**Does this survive Outline updates?**
+The script disables auto-updates on macOS. On Linux and Windows, re-run the script after any manual update. The backup is not affected by updates.
+
+**Does this work with Outline's Docker/Kubernetes deployment?**
+Yes. This tool patches the desktop client. Your self-hosted server can run on Docker, Kubernetes, bare metal, or any other hosting method. The script only needs the HTTPS URL where your Outline instance is reachable.
+
+**Does this phone home or collect telemetry?**
+No. The script runs locally, modifies a local file, and cleans up. It contacts only your self-hosted URL (for reachability check) and the npm registry (for `@electron/asar`). Both are optional and visible in `--dry-run` output.
+
 ## Tested With
 
 - Outline Desktop v1.5.1 (Electron 29.3.0)
 - macOS Sequoia 15.x
 
 The ASAR patching approach has been verified on macOS. Linux and Windows use the same ASAR contents and the same extract/patch/repack flow, with platform-specific wrappers for process detection, signing, and auto-update configuration.
+
+## Disclaimer
+
+This project is not affiliated with, endorsed by, or associated with [Outline](https://www.getoutline.com/) or General Outline, Inc. "Outline" is a trademark of its respective owner.
+
+This software is provided **as-is, without warranty of any kind**. Use it at your own risk. The authors accept no liability for any damage, data loss, or other consequences resulting from its use. You are responsible for verifying that this tool is appropriate for your environment before running it.
+
+By using this tool, you acknowledge that modifying third-party applications may violate their terms of service. Review Outline's license and terms before proceeding.
+
+See [LICENSE](LICENSE) for full terms (MIT).
 
 ## License
 
