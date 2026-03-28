@@ -385,6 +385,8 @@ function Show-DryRun($targetUrl, $currentUrl) {
     $n++
     Write-Host "    $n. Atomic swap: replace app.asar"
     $n++
+    Write-Host "    $n. Clear cached session URL from Electron config.json"
+    $n++
     Write-Host "    $n. Clean up (remove temp files and cached @electron/asar)"
     Write-Host ""
     Write-Green "  No changes were made. Remove -DryRun to apply."
@@ -394,7 +396,7 @@ function Show-DryRun($targetUrl, $currentUrl) {
 # ── Core: Patch ─────────────────────────────────────────────────────────────
 
 function Invoke-Patch([string]$targetUrl) {
-    $totalSteps = 5
+    $totalSteps = 6
 
     # Step 1: Backup
     Write-Step 1 $totalSteps "Backing up original ASAR"
@@ -476,8 +478,27 @@ function Invoke-Patch([string]$targetUrl) {
     Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item $verifyDir -Recurse -Force -ErrorAction SilentlyContinue
 
-    # Step 5: Auto-update note
-    Write-Step 5 $totalSteps "Auto-update guidance"
+    # Step 5: Clear cached session URL
+    Write-Step 5 $totalSteps "Clearing cached session URL"
+    $configDir = Join-Path $env:APPDATA "Outline"
+    if (-not (Test-Path $configDir)) {
+        $configDir = Join-Path $env:APPDATA "outline"
+    }
+    $configFile = Join-Path $configDir "config.json"
+    if (Test-Path $configFile) {
+        $oldContent = Get-Content $configFile -Raw -ErrorAction SilentlyContinue
+        Set-Content -Path $configFile -Value '{}' -NoNewline
+        if ($oldContent -match '"url"') {
+            Write-Green "  Cleared cached URL from config.json"
+        } else {
+            Write-Green "  config.json reset."
+        }
+    } else {
+        Write-Dim "  No config.json found — nothing to clear."
+    }
+
+    # Step 6: Auto-update note
+    Write-Step 6 $totalSteps "Auto-update guidance"
     Write-Yellow "  Auto-update disable on Windows varies by install method."
     Write-Host "    The app may update itself and overwrite this patch."
     Write-Host "    Re-run this script after any Outline update."

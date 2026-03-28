@@ -93,8 +93,9 @@ The script:
 4. **Repacks** to a temporary ASAR and **verifies** (URL presence, file count match)
 5. **Atomically swaps** the temp ASAR into place (the original stays untouched until this step)
 6. **Re-signs** the app (macOS only, ad-hoc for local use)
-7. **Disables auto-updates** so the patch survives
-8. **Cleans up** temp files and cached `@electron/asar`
+7. **Clears the cached session URL** from `config.json` so the app loads the new target on first launch
+8. **Disables auto-updates** so the patch survives
+9. **Cleans up** temp files and cached `@electron/asar`
 
 ## Safety
 
@@ -144,15 +145,20 @@ The script checks write permissions before modifying anything and tells you if e
 
 ## Authentication
 
-After patching, auth uses Outline's existing `outline://` URL scheme:
+After patching, the app loads your self-hosted URL and presents the login page. You click your OAuth/SAML provider, which opens the system browser for authentication.
 
-1. App loads your self-hosted URL
-2. You click through your OAuth/SAML login
-3. Your server redirects to `outline://your-host/auth/callback?token=...`
-4. Your OS routes that back to the desktop app
-5. The app loads the callback URL and you're authenticated
+The desktop app registers the `outline://` URL scheme. If your self-hosted server supports desktop auth redirects, the browser redirects to `outline://your-host/auth/callback?token=...` after OAuth completes, and the OS routes it back to the app.
 
-**Fallback**: If the redirect fails, log in via your browser, copy the `accessToken` cookie from DevTools, and paste it into the desktop app's DevTools (View > Toggle Developer Tools > Application > Cookies).
+**If the redirect doesn't return to the app** (common with older Outline server versions or certain OAuth configurations):
+
+1. Complete the login in your browser — you're now authenticated on the web version
+2. In the browser, open DevTools (F12) → Application → Cookies → your Outline domain
+3. Copy the value of the `accessToken` cookie
+4. In the desktop app, open DevTools (View → Toggle Developer Tools → Application → Cookies)
+5. Create or edit the `accessToken` cookie for your domain and paste the value
+6. Reload the app (Cmd+R / Ctrl+R)
+
+The desktop app stores session cookies independently from the browser, so the cookie transfer is a one-time step. Subsequent launches will use the stored session.
 
 ## Rollback
 

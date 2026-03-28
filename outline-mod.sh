@@ -558,6 +558,9 @@ show_dry_run() {
     n=$((n+1))
   fi
 
+  echo "    ${n}. Clear cached session URL from Electron config.json"
+  n=$((n+1))
+
   echo "    ${n}. Disable auto-updates"
   case "$OS" in
     macos) echo "       defaults write ${PLIST_DOMAIN} AutoUpdateDisabled -bool YES" ;;
@@ -575,8 +578,8 @@ show_dry_run() {
 
 do_patch() {
   local target_url="$1"
-  local total_steps=6
-  [[ "$OS" == "macos" ]] && total_steps=7
+  local total_steps=7
+  [[ "$OS" == "macos" ]] && total_steps=8
 
   # ── Step 1: Backup ──
   step 1 "$total_steps" "Backing up original ASAR"
@@ -683,6 +686,41 @@ do_patch() {
       debug "  Signature verification: passed"
     else
       yellow "  Signature verification returned non-zero (may be normal for ad-hoc)."
+    fi
+  fi
+
+  # ── Clear cached URL ──
+  local cache_step=$((total_steps - 1))
+  step "$cache_step" "$total_steps" "Clearing cached session URL"
+
+  # The app persists the last-visited URL in config.json (Electron userData).
+  # On first launch after patching, getLastUrl() would return the old URL and
+  # bypass our patched env.host. Clear it so the app loads the new target.
+  local config_dir=""
+  case "$OS" in
+    macos) config_dir="$HOME/Library/Application Support/Outline" ;;
+    linux)
+      config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/Outline"
+      # Also check lowercase variant
+      [[ -d "$config_dir" ]] || config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/outline"
+      ;;
+  esac
+
+  if [[ -n "$config_dir" ]]; then
+    local config_file="${config_dir}/config.json"
+    if [[ -f "$config_file" ]]; then
+      local old_url
+      old_url="$(grep -o '"url":"[^"]*"' "$config_file" 2>/dev/null | head -1 || true)"
+      # Write empty JSON to clear the cached URL (preserves custom hosts on next launch)
+      echo '{}' > "$config_file"
+      if [[ -n "$old_url" ]]; then
+        green "  Cleared cached URL from config.json"
+        debug "  Was: ${old_url}"
+      else
+        green "  config.json reset (no cached URL found)."
+      fi
+    else
+      debug "  No config.json found at ${config_file} — nothing to clear."
     fi
   fi
 
