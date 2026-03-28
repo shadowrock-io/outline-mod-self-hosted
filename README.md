@@ -5,15 +5,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![No Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)]()
 
-Patch the [Outline](https://www.getoutline.com/) desktop app to connect to your self-hosted instance instead of `app.getoutline.com`.
+The [Outline](https://www.getoutline.com/) desktop app hardcodes its server URL to `app.getoutline.com`. No setting, preference, or config file lets you change it. If you self-host Outline via Docker, Kubernetes, or bare metal, the official desktop app refuses to connect to your server.
 
-One script. One string change. Fully reversible. Cleans up after itself.
-
-## The Problem
-
-The Outline desktop app hardcodes its server URL to `app.getoutline.com`. There is no setting, preference, or config file to change it. If you self-host Outline (via Docker, Kubernetes, or bare metal), the official desktop app cannot connect to your server.
-
-This tool fixes that. It changes one URL string inside the app's Electron archive, then backs everything up so you can undo it at any time.
+This script swaps that URL for yours inside the app's Electron archive and keeps a backup for rollback.
 
 ## Quick Start
 
@@ -39,7 +33,7 @@ cd outline-mod-self-hosted
 .\outline-mod.ps1           # Windows
 ```
 
-The script prompts for your Outline URL, validates it, patches the app, and configures it for self-hosted use.
+The script prompts for your Outline URL, validates it, patches the app, and disables auto-updates.
 
 ## Usage
 
@@ -75,11 +69,11 @@ The script prompts for your Outline URL, validates it, patches the app, and conf
 | Linux | Outline (auto-detected in `/opt`, `/usr/lib`, `~/.local`) | Node.js / `npx` |
 | Windows | Outline (auto-detected in `%LOCALAPPDATA%\Programs` or `%PROGRAMFILES%`) | Node.js / `npx` |
 
-`npx` downloads `@electron/asar` temporarily during the mod. The script **removes it from the npx cache when done**.
+`npx` downloads `@electron/asar` for the patch and removes it from the cache afterward.
 
 ## How It Works
 
-The Outline desktop app is an Electron wrapper around the Outline web UI. Every server URL reference traces back to a single getter in `build/env.js` inside the app's ASAR archive:
+The Outline desktop app is an Electron shell around the web UI. The server URL lives in a single getter in `build/env.js` inside the app's ASAR archive:
 
 ```javascript
 static get host() {
@@ -89,37 +83,37 @@ static get host() {
 }
 ```
 
-The ASAR archive contents are identical across macOS, Linux, and Windows builds. The patching logic is the same on all platforms.
+The ASAR archive contents are identical across macOS, Linux, and Windows builds.
 
 The script:
 
 1. **Backs up** the original `app.asar` with a SHA256 checksum
 2. **Extracts** the ASAR archive to a temp directory
-3. **Patches** the single URL string in `build/env.js`
+3. **Patches** the URL string in `build/env.js`
 4. **Repacks** to a temporary ASAR and **verifies** (URL presence, file count match)
-5. **Atomically swaps** the temp ASAR into place (the original is untouched until this point)
+5. **Atomically swaps** the temp ASAR into place (the original stays untouched until this step)
 6. **Re-signs** the app (macOS only, ad-hoc for local use)
 7. **Disables auto-updates** so the patch survives
-8. **Cleans up** all temp files and cached `@electron/asar`
+8. **Cleans up** temp files and cached `@electron/asar`
 
-## Safety Features
+## Safety
 
 | Feature | Detail |
 |---|---|
-| `--dry-run` | Preview every action with exact commands before modifying anything |
-| `--status` | Inspect current URL, SHA256 checksums, backup integrity, code signature |
-| Atomic swap | Repacks to a `.tmp` file, verifies, then `mv` into place. If verification fails, the original ASAR is untouched. |
+| `--dry-run` | Shows every action with exact commands before modifying anything |
+| `--status` | Reports current URL, SHA256 checksums, backup integrity, code signature |
+| Atomic swap | Repacks to a `.tmp` file, verifies, then moves into place. If verification fails, the original ASAR stays untouched. |
 | SHA256 checksums | Original ASAR hash stored alongside backup. Rollback verifies the hash matches. |
-| File count check | Compares file count in repacked ASAR against the original. Catches corrupt repacks. |
-| Backup preservation | Never overwrites an existing backup. Safe to re-run against a different URL. |
-| Permission check | Detects missing write permissions and advises `sudo` instead of failing with opaque errors. |
-| Process detection | Detects running Outline and offers to quit it gracefully before patching. |
-| Self-cleanup | Removes all temp files and `@electron/asar` from the npx cache on exit. |
-| Single file | Each script is one file. Read it before running. |
+| File count check | Compares file count in repacked ASAR against the original to flag corrupt repacks |
+| Backup preservation | You can re-run with a different URL without losing the original backup |
+| Permission check | Detects missing write permissions and tells you to use `sudo` |
+| Process detection | Detects running Outline and offers to quit it before patching |
+| Self-cleanup | Removes temp files and `@electron/asar` from the npx cache on exit |
+| Single file | Each script is one auditable file |
 
 ## URL Validation
 
-The script accepts a variety of URL formats and normalizes them:
+The script normalizes URL formats before patching:
 
 | Input | Normalized To |
 |---|---|
@@ -146,17 +140,17 @@ Validation checks: HTTPS required, FQDN (must contain a dot), valid port (1-6553
 
 The script checks write permissions before modifying anything and tells you if elevation is needed.
 
-**Linux note:** Snap and Flatpak packages are read-only and cannot be patched. The script detects these and explains the alternative (install via `.deb` or direct download).
+**Linux note:** Snap and Flatpak packages are read-only and cannot be patched. The script detects these and points you to `.deb` or direct download as alternatives.
 
 ## Authentication
 
-After patching, the auth flow works through Outline's existing `outline://` URL scheme:
+After patching, auth uses Outline's existing `outline://` URL scheme:
 
 1. App loads your self-hosted URL
-2. You click through your normal OAuth/SAML login
+2. You click through your OAuth/SAML login
 3. Your server redirects to `outline://your-host/auth/callback?token=...`
 4. Your OS routes that back to the desktop app
-5. You're logged in
+5. The app loads the callback URL and you're authenticated
 
 **Fallback**: If the redirect fails, log in via your browser, copy the `accessToken` cookie from DevTools, and paste it into the desktop app's DevTools (View > Toggle Developer Tools > Application > Cookies).
 
@@ -172,16 +166,16 @@ Restores the original ASAR from backup, verifies the SHA256 checksum, re-signs (
 ## FAQ
 
 **Can I switch to a different self-hosted URL later?**
-Yes. Run the script again with the new URL. It detects the existing mod and swaps the URL. The backup of the original (unmodified) app is preserved.
+Run the script again with the new URL. It detects the existing mod and swaps the URL. The original backup is preserved.
 
-**Does this survive Outline updates?**
-The script disables auto-updates on macOS. On Linux and Windows, re-run the script after any manual update. The backup is not affected by updates.
+**Does the patch survive Outline updates?**
+The script disables auto-updates on macOS. On Linux and Windows, re-run the script after a manual update.
 
-**Does this work with Outline's Docker/Kubernetes deployment?**
-Yes. This tool patches the desktop client. Your self-hosted server can run on Docker, Kubernetes, bare metal, or any other hosting method. The script only needs the HTTPS URL where your Outline instance is reachable.
+**Does this work with Outline on Docker/Kubernetes?**
+Yes. This tool patches the desktop client. Your server can run on Docker, Kubernetes, bare metal, or any other host. The script needs the HTTPS URL where your Outline instance is reachable.
 
 **Does this phone home or collect telemetry?**
-No. The script runs locally, modifies a local file, and cleans up. It contacts only your self-hosted URL (for reachability check) and the npm registry (for `@electron/asar`). Both are optional and visible in `--dry-run` output.
+No. The script runs locally and modifies a local file. It contacts your self-hosted URL (reachability check) and the npm registry (`@electron/asar` download). Both are visible in `--dry-run` output.
 
 ## Tested With
 
@@ -194,9 +188,9 @@ The ASAR patching approach has been verified on macOS. Linux and Windows use the
 
 This project is not affiliated with, endorsed by, or associated with [Outline](https://www.getoutline.com/) or General Outline, Inc. "Outline" is a trademark of its respective owner.
 
-This software is provided **as-is, without warranty of any kind**. Use it at your own risk. The authors accept no liability for any damage, data loss, or other consequences resulting from its use. You are responsible for verifying that this tool is appropriate for your environment before running it.
+This software is provided **as-is, without warranty of any kind**. Use it at your own risk. The authors accept no liability for damage, data loss, or other consequences from its use. You are responsible for verifying that this tool is appropriate for your environment before running it.
 
-By using this tool, you acknowledge that modifying third-party applications may violate their terms of service. Review Outline's license and terms before proceeding.
+Modifying third-party applications may violate their terms of service. Review Outline's license and terms before proceeding.
 
 See [LICENSE](LICENSE) for full terms (MIT).
 
