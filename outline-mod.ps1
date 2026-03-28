@@ -396,7 +396,7 @@ function Show-DryRun($targetUrl, $currentUrl) {
 # ── Core: Patch ─────────────────────────────────────────────────────────────
 
 function Invoke-Patch([string]$targetUrl) {
-    $totalSteps = 6
+    $totalSteps = 7
 
     # Step 1: Backup
     Write-Step 1 $totalSteps "Backing up original ASAR"
@@ -446,8 +446,44 @@ function Invoke-Patch([string]$targetUrl) {
     }
     Write-Green "  $currentUrl -> $targetUrl"
 
-    # Step 4: Repack + verify
-    Write-Step 4 $totalSteps "Repacking and verifying"
+    # Step 4: Patch auth flow (in-app OAuth popup)
+    Write-Step 4 $totalSteps "Patching auth flow for in-app OAuth"
+
+    # Use the same Node.js patcher as the bash script (node is already a dependency)
+    $patcherPath = Join-Path $extractDir "_patcher.js"
+    $patcherContent = @'
+const fs = require("fs");
+const path = require("path");
+const dir = process.argv[2];
+const uhPath = path.join(dir, "build/utils/URLHelper.js");
+let uh = fs.readFileSync(uhPath, "utf8");
+const uhOld = '            parsedUrl.pathname.startsWith("/share/") ||\n            parsedUrl.pathname.startsWith("/auth/"));';
+const uhNew = '            parsedUrl.pathname.startsWith("/share/"));';
+if (!uh.includes(uhOld)) { console.error("URLHelper.js: /auth/ pattern not found"); process.exit(1); }
+uh = uh.replace(uhOld, uhNew);
+fs.writeFileSync(uhPath, uh);
+const awPath = path.join(dir, "build/AppWindow.js");
+let aw = fs.readFileSync(awPath, "utf8");
+const navOld = `        this.handleNavigation = (event, targetUrl) => {\n            if (URLHelper_1.default.isExternal(targetUrl)) {\n                event.preventDefault();\n                void electron_1.shell.openExternal(targetUrl);\n                return false;\n            }\n            return true;\n        };`;
+const navNew = `        this.handleNavigation = (event, targetUrl) => {\n            try {\n                var targetParsed = new URL(targetUrl);\n                var appHost = new URL(env_1.default.host).host;\n                if (targetParsed.host === appHost && targetParsed.pathname.startsWith("/auth")) {\n                    event.preventDefault();\n                    this._openAuthPopup(targetUrl, appHost);\n                    return false;\n                }\n            } catch (e) {}\n            if (URLHelper_1.default.isExternal(targetUrl)) {\n                event.preventDefault();\n                void electron_1.shell.openExternal(targetUrl);\n                return false;\n            }\n            return true;\n        };`;
+if (!aw.includes(navOld)) { console.error("AppWindow.js: handleNavigation pattern not found"); process.exit(1); }
+aw = aw.replace(navOld, navNew);
+const exportLine = "exports.default = AppWindow;";
+const popup = `\nAppWindow.prototype._openAuthPopup = function(authUrl, appHost) {\n    var mainWindow = this;\n    var authWin = new electron_1.BrowserWindow({\n        width: 520, height: 720, title: "Sign in", show: true,\n        titleBarStyle: "default",\n        webPreferences: { contextIsolation: true, nodeIntegration: false }\n    });\n    var ua = authWin.webContents.getUserAgent();\n    authWin.webContents.setUserAgent(ua.replace(/ Electron\\/[\\d.]+/, "").replace(/ Outline\\/[\\d.]+/, ""));\n    authWin.webContents.on("did-finish-load", function() {\n        authWin.webContents.insertCSS("html, body, body * { -webkit-app-region: no-drag !important; }");\n    });\n    authWin.webContents.on("did-navigate", function(navEvt, navUrl) {\n        authWin.webContents.insertCSS("html, body, body * { -webkit-app-region: no-drag !important; }");\n        checkAuthComplete(navUrl);\n    });\n    authWin.loadURL(authUrl);\n    authWin.webContents.setWindowOpenHandler(function(details) {\n        setTimeout(function() { authWin.webContents.loadURL(details.url); }, 50);\n        return { action: "deny" };\n    });\n    function checkAuthComplete(url) {\n        try {\n            var parsed = new URL(url);\n            if (parsed.host === appHost && !parsed.pathname.startsWith("/auth/")) {\n                authWin.close();\n                mainWindow.loadURL(url);\n                return true;\n            }\n        } catch(e) {}\n        return false;\n    }\n    authWin.webContents.on("will-navigate", function(evt, url) {\n        if (checkAuthComplete(url)) { evt.preventDefault(); }\n    });\n    authWin.webContents.on("will-redirect", function(evt, url) {\n        if (checkAuthComplete(url)) { evt.preventDefault(); }\n    });\n};\n` + exportLine;
+if (!aw.includes(exportLine)) { console.error("AppWindow.js: export pattern not found"); process.exit(1); }
+aw = aw.replace(exportLine, popup);
+fs.writeFileSync(awPath, aw);
+'@
+    Set-Content -Path $patcherPath -Value $patcherContent
+    $patchResult = & node $patcherPath $extractDir 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Stop-WithError "Auth flow patch failed: $patchResult"
+    }
+    Remove-Item $patcherPath -Force -ErrorAction SilentlyContinue
+    Write-Green "  Auth flow patched for in-app OAuth."
+
+    # Step 5: Repack + verify
+    Write-Step 5 $totalSteps "Repacking and verifying"
     $tmpAsar = "$($Script:Asar).tmp"
     npx --yes "@electron/asar" pack $extractDir $tmpAsar 2>$null
 
@@ -478,8 +514,8 @@ function Invoke-Patch([string]$targetUrl) {
     Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item $verifyDir -Recurse -Force -ErrorAction SilentlyContinue
 
-    # Step 5: Clear cached session URL
-    Write-Step 5 $totalSteps "Clearing cached session URL"
+    # Step 6: Clear cached session URL
+    Write-Step 6 $totalSteps "Clearing cached session URL"
     $configDir = Join-Path $env:APPDATA "Outline"
     if (-not (Test-Path $configDir)) {
         $configDir = Join-Path $env:APPDATA "outline"
@@ -497,8 +533,8 @@ function Invoke-Patch([string]$targetUrl) {
         Write-Dim "  No config.json found — nothing to clear."
     }
 
-    # Step 6: Auto-update note
-    Write-Step 6 $totalSteps "Auto-update guidance"
+    # Step 7: Auto-update note
+    Write-Step 7 $totalSteps "Auto-update guidance"
     Write-Yellow "  Auto-update disable on Windows varies by install method."
     Write-Host "    The app may update itself and overwrite this patch."
     Write-Host "    Re-run this script after any Outline update."

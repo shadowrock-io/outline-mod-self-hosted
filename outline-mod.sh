@@ -544,6 +544,8 @@ show_dry_run() {
   echo "    ${n}. Patch build/env.js"
   echo "       ${current_url} → ${target_url}"
   n=$((n+1))
+  echo "    ${n}. Patch auth flow (in-app OAuth popup for Google/SAML/etc.)"
+  n=$((n+1))
   echo "    ${n}. Repack to temporary ASAR, verify integrity"
   n=$((n+1))
   echo "    ${n}. Atomic swap: replace app.asar"
@@ -578,8 +580,8 @@ show_dry_run() {
 
 do_patch() {
   local target_url="$1"
-  local total_steps=7
-  [[ "$OS" == "macos" ]] && total_steps=8
+  local total_steps=8
+  [[ "$OS" == "macos" ]] && total_steps=9
 
   # ── Step 1: Backup ──
   step 1 "$total_steps" "Backing up original ASAR"
@@ -633,15 +635,125 @@ do_patch() {
   fi
   green "  ${current_url} → ${target_url}"
 
-  # ── Step 4: Repack (to temp file) ──
-  step 4 "$total_steps" "Repacking ASAR archive"
+  # ── Step 4: Patch auth flow (in-app OAuth popup) ──
+  step 4 "$total_steps" "Patching auth flow for in-app OAuth"
+
+  # Write a Node.js patcher (multi-line replacements are unreliable in sed)
+  cat > "${extract_dir}/_patcher.js" << 'PATCHEREOF'
+const fs = require("fs");
+const path = require("path");
+const dir = process.argv[2];
+
+// --- Patch URLHelper.js: remove /auth/ from isExternal ---
+const uhPath = path.join(dir, "build/utils/URLHelper.js");
+let uh = fs.readFileSync(uhPath, "utf8");
+const uhOld = '            parsedUrl.pathname.startsWith("/share/") ||\n            parsedUrl.pathname.startsWith("/auth/"));';
+const uhNew = '            parsedUrl.pathname.startsWith("/share/"));';
+if (!uh.includes(uhOld)) { console.error("URLHelper.js: /auth/ pattern not found"); process.exit(1); }
+uh = uh.replace(uhOld, uhNew);
+fs.writeFileSync(uhPath, uh);
+console.log("  URLHelper.js: removed /auth/ from isExternal");
+
+// --- Patch AppWindow.js: auth popup for OAuth ---
+const awPath = path.join(dir, "build/AppWindow.js");
+let aw = fs.readFileSync(awPath, "utf8");
+
+// Replace handleNavigation to intercept /auth/ paths and open auth popup
+const navOld = `        this.handleNavigation = (event, targetUrl) => {
+            if (URLHelper_1.default.isExternal(targetUrl)) {
+                event.preventDefault();
+                void electron_1.shell.openExternal(targetUrl);
+                return false;
+            }
+            return true;
+        };`;
+const navNew = `        this.handleNavigation = (event, targetUrl) => {
+            try {
+                var targetParsed = new URL(targetUrl);
+                var appHost = new URL(env_1.default.host).host;
+                if (targetParsed.host === appHost && targetParsed.pathname.startsWith("/auth")) {
+                    event.preventDefault();
+                    this._openAuthPopup(targetUrl, appHost);
+                    return false;
+                }
+            } catch (e) {}
+            if (URLHelper_1.default.isExternal(targetUrl)) {
+                event.preventDefault();
+                void electron_1.shell.openExternal(targetUrl);
+                return false;
+            }
+            return true;
+        };`;
+if (!aw.includes(navOld)) { console.error("AppWindow.js: handleNavigation pattern not found"); process.exit(1); }
+aw = aw.replace(navOld, navNew);
+
+// Add _openAuthPopup method before the final export
+const exportLine = "exports.default = AppWindow;";
+const authPopupMethod = `
+AppWindow.prototype._openAuthPopup = function(authUrl, appHost) {
+    var mainWindow = this;
+    var authWin = new electron_1.BrowserWindow({
+        width: 520, height: 720, title: "Sign in", show: true,
+        titleBarStyle: "default",
+        webPreferences: { contextIsolation: true, nodeIntegration: false }
+    });
+    // Strip Electron/Outline from user-agent so OAuth providers render full interactive UI
+    var ua = authWin.webContents.getUserAgent();
+    authWin.webContents.setUserAgent(ua.replace(/ Electron\\/[\\d.]+/, "").replace(/ Outline\\/[\\d.]+/, ""));
+    // Ensure all content is clickable (override macOS hiddenInset drag regions)
+    authWin.webContents.on("did-finish-load", function() {
+        authWin.webContents.insertCSS("html, body, body * { -webkit-app-region: no-drag !important; }");
+    });
+    authWin.webContents.on("did-navigate", function(navEvt, navUrl) {
+        authWin.webContents.insertCSS("html, body, body * { -webkit-app-region: no-drag !important; }");
+        checkAuthComplete(navUrl);
+    });
+    authWin.loadURL(authUrl);
+    // OAuth forms may try to open new windows — keep them in the popup
+    authWin.webContents.setWindowOpenHandler(function(details) {
+        setTimeout(function() { authWin.webContents.loadURL(details.url); }, 50);
+        return { action: "deny" };
+    });
+    function checkAuthComplete(url) {
+        try {
+            var parsed = new URL(url);
+            if (parsed.host === appHost && !parsed.pathname.startsWith("/auth/")) {
+                authWin.close();
+                mainWindow.loadURL(url);
+                return true;
+            }
+        } catch(e) {}
+        return false;
+    }
+    authWin.webContents.on("will-navigate", function(evt, url) {
+        if (checkAuthComplete(url)) { evt.preventDefault(); }
+    });
+    authWin.webContents.on("will-redirect", function(evt, url) {
+        if (checkAuthComplete(url)) { evt.preventDefault(); }
+    });
+};
+` + exportLine;
+if (!aw.includes(exportLine)) { console.error("AppWindow.js: export pattern not found"); process.exit(1); }
+aw = aw.replace(exportLine, authPopupMethod);
+
+fs.writeFileSync(awPath, aw);
+console.log("  AppWindow.js: added auth popup + handleNavigation patch");
+PATCHEREOF
+
+  node "${extract_dir}/_patcher.js" "$extract_dir" \
+    || die "Auth flow patch failed. The app structure may have changed."
+  rm -f "${extract_dir}/_patcher.js"
+  green "  Auth flow patched for in-app OAuth."
+
+  # ── Step 5: Repack (to temp file) ──
+  step 5 "$total_steps" "Repacking ASAR archive"
   local tmp_asar="${ASAR}.tmp"
   register_cleanup "$tmp_asar"
   npx --yes @electron/asar pack "$extract_dir" "$tmp_asar" 2>/dev/null
   green "  Repacked to temporary file."
 
-  # ── Step 5: Verify + atomic swap ──
-  step 5 "$total_steps" "Verifying integrity and swapping"
+  # ── Step 6: Verify + atomic swap ──
+  step 6 "$total_steps" "Verifying integrity and swapping"
 
   # Verify the temp ASAR contains the patched URL
   local verify_dir
@@ -671,8 +783,8 @@ do_patch() {
   green "  Verified and swapped."
   dim "  SHA256: ${patched_hash}"
 
-  # ── Step 6 (macOS): Re-sign ──
-  local sign_step=6
+  # ── Step 7 (macOS): Re-sign ──
+  local sign_step=7
   if [[ "$OS" == "macos" && -n "$APP_ROOT" ]]; then
     step "$sign_step" "$total_steps" "Re-signing application"
     codesign --force --deep --sign - "$APP_ROOT" 2>/dev/null

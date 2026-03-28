@@ -90,12 +90,13 @@ The script:
 1. **Backs up** the original `app.asar` with a SHA256 checksum
 2. **Extracts** the ASAR archive to a temp directory
 3. **Patches** the URL string in `build/env.js`
-4. **Repacks** to a temporary ASAR and **verifies** (URL presence, file count match)
-5. **Atomically swaps** the temp ASAR into place (the original stays untouched until this step)
-6. **Re-signs** the app (macOS only, ad-hoc for local use)
-7. **Clears the cached session URL** from `config.json` so the app loads the new target on first launch
-8. **Disables auto-updates** so the patch survives
-9. **Cleans up** temp files and cached `@electron/asar`
+4. **Patches the auth flow** so OAuth (Google, SAML, etc.) completes inside a dedicated popup window instead of bouncing to the system browser
+5. **Repacks** to a temporary ASAR and **verifies** (URL presence, file count match)
+6. **Atomically swaps** the temp ASAR into place (the original stays untouched until this step)
+7. **Re-signs** the app (macOS only, ad-hoc for local use)
+8. **Clears the cached session URL** from `config.json` so the app loads the new target on first launch
+9. **Disables auto-updates** so the patch survives
+10. **Cleans up** temp files and cached `@electron/asar`
 
 ## Safety
 
@@ -145,20 +146,14 @@ The script checks write permissions before modifying anything and tells you if e
 
 ## Authentication
 
-After patching, the app loads your self-hosted URL and presents the login page. You click your OAuth/SAML provider, which opens the system browser for authentication.
+After patching, the app loads your self-hosted URL and presents the login page. When you click your OAuth/SAML provider, a dedicated sign-in popup window opens for authentication.
 
-The desktop app registers the `outline://` URL scheme. If your self-hosted server supports desktop auth redirects, the browser redirects to `outline://your-host/auth/callback?token=...` after OAuth completes, and the OS routes it back to the app.
+The popup uses a clean Chromium user-agent (stripped of Electron/Outline identifiers) so OAuth providers render their full interactive UI. After authentication completes, the popup closes and the main app window loads your authenticated session. The entire flow stays within the desktop app.
 
-**If the redirect doesn't return to the app** (common with older Outline server versions or certain OAuth configurations):
-
-1. Complete the login in your browser — you're now authenticated on the web version
-2. In the browser, open DevTools (F12) → Application → Cookies → your Outline domain
-3. Copy the value of the `accessToken` cookie
-4. In the desktop app, open DevTools (View → Toggle Developer Tools → Application → Cookies)
-5. Create or edit the `accessToken` cookie for your domain and paste the value
-6. Reload the app (Cmd+R / Ctrl+R)
-
-The desktop app stores session cookies independently from the browser, so the cookie transfer is a one-time step. Subsequent launches will use the stored session.
+Three patches make this work:
+- **URLHelper.js**: `/auth/` paths are no longer routed to the system browser
+- **AppWindow.js**: Auth navigations open a dedicated popup with standard title bar, no-drag CSS, and clean user-agent
+- **AppWindow.js**: OAuth form redirects (including cross-domain chains like Google → your server) stay in the popup until auth completes
 
 ## Rollback
 
